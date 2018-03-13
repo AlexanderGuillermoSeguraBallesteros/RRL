@@ -1,146 +1,331 @@
-import numpy as np
+# Import plot libraries.
 import matplotlib.pyplot as plt
-import math
-from pyalgotrade import strategy
-from pyalgotrade import plotter
-from pyalgotrade.tools import yahoofinance
-from pyalgotrade.technical import vwap
-from pyalgotrade.stratanalyzer import sharpe
 
+import quandl
+
+# Import Scipy functions
 from scipy.optimize import fmin_bfgs
 from scipy.optimize import fmin_slsqp
 from scipy.optimize import  fmin_ncg
 import scipy.optimize as op
 
-from numpy import asarray
-from numpy import diag
-from numpy import zeros_like
+# Import Numpy functions
+import numpy as np
 from numpy import genfromtxt
 
+
+
+# Import local functions.
 from UtilityFunctions import  GetReturns
 from CoreFunctions import ObjectiveFunction
+from CoreFunctions import GradientFunctionM
+from CoreFunctions import  train
 from CoreFunctions import ComputeF
 from CoreFunctions import RewardFunction
 from CoreFunctions import SharpeRatio
+from UtilityFunctions import FeatureNormalize
+#from rrl_class import RRL
+
 #### MAIN ####
 
 
 # Download the testing data from yahoo Finance.
-instruments = ["aapl"] # Set the instruments to download data.
-feed = yahoofinance.build_feed(instruments, 2011, 2012, "./Data") # Download the specified data.
+#instruments = ["aapl"] # Set the instruments to download data.
+#feed = yahoofinance.build_feed(instruments, 2011, 2012, "./Data") # Download the specified data.
 
 # Retrieve data as an NP array.
-trainingData = genfromtxt('./Data/aapl-2011-yahoofinance.csv', delimiter=',') # Read the data from CSV file.
-trainingData = trainingData[1:, 6]  # Select the adjusted close
+#trainingData = genfromtxt('./Data/aapl-2011-yahoofinance.csv', delimiter=',') # Read the data from CSV file.
+#trainingData = trainingData[1:, 6]  # Select the adjusted close
 
-trainingData2012 = genfromtxt('./Data/aapl-2012-yahoofinance.csv', delimiter=',') # Read the data from CSV file.
-trainingData2012 = trainingData2012[1:, 6]  # Select the adjusted close
+#testData = genfromtxt('./Data/aapl-2012-yahoofinance.csv', delimiter=',') # Read the data from CSV file.
+#testData = testData[1:, 6]  # Select the adjusted close
 
 #print(trainingData.size)
-trainingData = np.concatenate([trainingData,trainingData2012],axis=0)
+#trainingData = np.concatenate([trainingData,trainingData2012],axis=0)
 #print (trainingData.size)
 
+# Load test training data
+#testData = genfromtxt('./Data/test2.csv', delimiter=',') # Read the data from CSV file.
+#testData = testData[:]  # Select the adjusted close
+
+## Generate simulated signal
+'''
+media = 50
+Line = np.ones(600) * media
+deviation = np.random.random(600)*10
+sig = np.add(Line,deviation)
+
+t = np.linspace(0, 500, 500, endpoint=False)
+sig = np.sin(20 * np.pi * t)
+sig = signal.square(2 * np.pi * 30 * t, duty=(sig + 10)/2)
+plt.plot(t, sig)
+plt.show()
+'''
+
+# Get training and testing data from quandl.
+# Configure quandl account.
+
+quandl.api_config.ApiConfig.api_key = "UYzP-62GzccS1s_3NToj"
+trainingData = quandl.get("WIKI/AAPL", start_date = "2008-01-01", end_date="2014-12-31", returns="numpy")
+trainingData = trainingData["Adj. Close"]
+testData = quandl.get("WIKI/AAPL", start_date = "2014-01-01", end_date="2015-12-31", returns="numpy")
+testData = testData["Adj. Close"]
+
 # Set the parameters
-M = 10
-T = 150
-windowSize = T + M
-transactionCosts = 0.0001
+optimizationFunction = "return"
+M = 50
+T = 500
+startPos = M
+finishPos = startPos + T
+transactionCosts = 0.001
 mu = 1
+F = np.zeros(T + 1)
+dF = np.zeros(T + 1)
 
 # Generate the returns.
+# X = trainingData
 X = GetReturns(trainingData)
+Xn = FeatureNormalize(X)
+
+returns = X[startPos:finishPos] + 1
+for i in range(1, returns.size):
+    returns[i] = returns[i-1]*returns[i]
 
 # Generate theta
 theta = np.ones(M+2)
 
-
-# Compute the output F.
+'''
+rrl = RRL(optimization_function=optimizationFunction)
 print("Computing neuron outputs F... ")
-F = ComputeF(X[0:windowSize],theta,T,M)
+F = ComputeF(theta, Xn, T, M, startPos)
+print(rrl.__compute_F__(theta,Xn,T,M,startPos))
+print(F)
+print(sum(rrl.__compute_F__(theta,Xn,T,M,startPos)-F))
 # Compute the rewards
 print("Computing reward function... ")
-Rewards = RewardFunction(mu,F,transactionCosts,T,M,X[0:windowSize])
-# Compute the Sharpe ratio.
-print("Computing Sharpe ratio... ")
-sharpe = SharpeRatio(Rewards)
+rewards = RewardFunction(mu, F, transactionCosts, T, M, X)
+print(sum(rrl.reward_function(rrl.__compute_F__(theta,Xn,T,M,startPos),T,M,X) - rewards))
 
-#print(sharpe)
-#print(Rewards, Rewards.size)
-#print(F, F.size)
-#print(theta, theta.size)
+print("objective function")
+print(ObjectiveFunction(theta, X, Xn, T, M, mu, transactionCosts, startPos, optimizationFunction))
+print(rrl.__ObjectiveFunction__(theta,X, Xn, T, M, startPos))
 
-
+print("Gradient")
+g1 = GradientFunctionM(theta, X, Xn, T, M, mu, transactionCosts, startPos, optimizationFunction)
+g2 = rrl.__GradientFunctionM__(theta,X, Xn, T, M, startPos)
+print(sum(g1-g2))
+'''
 print ("Computing theta...")
 # Compute optimal theta and cost
-#xopt = fmin_bfgs(ObjectiveFunction, x0=theta, args=(X[0:windowSize], mu, transactionCosts, M, T))
-theta = op.minimize(fun=ObjectiveFunction,x0=theta, args=(X[0:windowSize], mu, transactionCosts, M, T), method='TNC')
-print ("Computing theta finished.")
+theta = fmin_ncg(ObjectiveFunction, theta, GradientFunctionM, args=(X, Xn, T, M, mu, transactionCosts, startPos, optimizationFunction), avextol=1e-8, maxiter=50)
+#theta = train(theta, X, Xn, T, M, mu, transactionCosts, startPos, 1, 500, optimizationFunction)
+#theta2 = fmin_ncg(rrl.__ObjectiveFunction__, theta, rrl.__GradientFunctionM__,
+#                 args=(X, Xn, T, M, startPos), avextol=1e-8, maxiter=50)
+#)
 
-# Get the optimal values for theta.
-theta = theta.x
+## PLOTTING ##
+# Compute the output F.
+print("Computing neuron outputs F... ")
+F = ComputeF(theta, Xn, T, M, startPos)
+# Compute the rewards
+print("Computing reward function... ")
+rewards = RewardFunction(mu, F, transactionCosts, T, M, X)
+# Compute the cumulative reward.
+rewards = rewards + 1 # Add one to the rewards vector such that the reward does not vanish.
+for i in range(1, rewards.size):
+    rewards[i] = rewards[i-1]*rewards[i]
+
+returns = X[startPos:finishPos] + 1
+for i in range(1, returns.size):
+    returns[i] = returns[i-1]*returns[i]
+
+plt.subplot(3, 1, 1)
+plt.title("Returns")
+plt.plot(returns)
+plt.xlim([0, finishPos])
+plt.subplot(3, 1, 2)
+plt.title("Neuron Output")
+plt.plot([0, T], [0, 0], color='k', linestyle='-', linewidth=2)
+plt.plot(F[1:], color='r', linestyle='--')
+plt.ylim([-1,1])
+plt.xlim([0, finishPos])
+plt.subplot(3, 1, 3)
+plt.title("Agent Rewards")
+plt.plot(rewards)
+plt.xlim([0, finishPos])
+plt.show()
+
+fig, ax1 = plt.subplots()
+t = np.arange(0.0, 150.0, 1)
+ax1.plot(F[1:], 'y')
+ax1.set_xlabel('Days')
+# Make the y-axis label and tick labels match the line color.
+ax1.set_ylabel('Neuron Output', color='b')
+for tl in ax1.get_yticklabels():
+    tl.set_color('b')
+
+B = F[1:] > 0
+for i,b in enumerate(B):
+    if b:
+        plt.plot([i, i], [-1, 1], color='b', linestyle='-', linewidth=2)
+    else:
+        plt.plot([i, i], [-1, 1], color='g', linestyle='-', linewidth=2)
+
+ax2 = ax1.twinx()
+ax2.plot(returns, 'r-', linewidth=3)
+ax2.set_ylabel('Returns', color='r')
+for tl in ax2.get_yticklabels():
+    tl.set_color('r')
+
+plt.show()
+## END PLOTTING ##
+
+
+# Start the training #
+# Set training window size.
+N = 100
+# Set inputs window size.
+J = M
+# Set number of training iterations.
+I = 15
+# Set the starting position.
+startPos += 1
+
+print("Training ...")
+for i in range(1, I):
+    print("On iteration: ", i)
+    theta = fmin_ncg(ObjectiveFunction, theta, GradientFunctionM,
+                     args=(X, Xn, N, J, mu, transactionCosts, startPos, optimizationFunction),
+                     maxiter=50)
+    #theta = train(theta, X, Xn, N, J, mu, transactionCosts, startPos, 1, 500, optimizationFunction)
+    startPos += 1
+print("Finished training.")
 
 # Compute the output F.
 print("Computing neuron outputs F... ")
-F = ComputeF(X[0:windowSize], theta, T, M)
+F = ComputeF(theta, Xn, N, J, startPos)
 # Compute the rewards
 print("Computing reward function... ")
-rewards = RewardFunction(mu, F, transactionCosts, T, M, X[0:windowSize])
+rewards = RewardFunction(mu, F, transactionCosts, N, J, X)
 # Compute the cumulative reward.
 rewards = rewards + 1 # Add one to the rewards vector such that the reward does not vanish.
-for i in range(1,rewards.size):
+for i in range(1, rewards.size):
     rewards[i] = rewards[i-1]*rewards[i]
 
+returns = X[startPos:finishPos] + 1
+for i in range(1, returns.size):
+    returns[i] = returns[i-1]*returns[i]
+
+
 # Plotting #
-
-plt.subplot(3,1,1)
-plt.plot(trainingData)
-plt.xlim([0,210])
-plt.subplot(3,1,2)
-plt.plot(F[1:])
-plt.xlim([0,210])
-plt.subplot(3,1,3)
-plt.plot(rewards)
-plt.xlim([0,210])
-plt.show()
-
-## TRAINING ##
-J = 10
-N = 15
-F = np.zeros(J*N)
-rewards = np.zeros(J*N)
-for j in range(0,J):
-    print("Training ",j )
-    # Compute the outputs for current theta.
-    print("Computing neuron outputs F for training " )
-    F_j = ComputeF(X[T + j*N:(j+1)*N+windowSize], theta, N, M)
-    #F_j = ComputeF(X[T+i*N-1:(i+1)*N-1+T], theta, T, N)
-    F[j*N:(j+1)*N] = F_j[1:]
-
-    # Compute rewards
-    rewards_j = RewardFunction(mu, F_j, transactionCosts, N, M, X[T + j*N:(j+1)*N+windowSize])
-    rewards_j = rewards_j + 1
-    rewards[j*N:(j+1)*N] = rewards_j
-
-    for k in range(j*N,(j+1)*N):
-        #print(k)
-        if (k-1) > 0:
-            rewards[k] = rewards[k-1]*rewards[k]
-
-    print ("Computing theta for training",j)
-    theta = op.minimize(fun=ObjectiveFunction, x0=theta, args=(X[T + j*N:(j+1)*N+windowSize], mu, transactionCosts, M, N), method='TNC')
-    theta = theta.x
-
 plt.subplot(3, 1, 1)
-plt.plot(trainingData[T + M:J*N+windowSize])
-plt.xlim([0, 210])
+plt.title("Returns")
+plt.plot(returns)
+#plt.xlim([0, 210])
 plt.subplot(3, 1, 2)
-plt.plot(F[1:])
-plt.xlim([0, 210])
+plt.title("Neuron Output")
+plt.plot([0, T], [0, 0], color='k', linestyle='-', linewidth=2)
+plt.plot(F[1:], color='r', linestyle='--')
+plt.ylim([-1,1])
+
+
+#plt.xlim([0, 210])
 plt.subplot(3, 1, 3)
+plt.title("Agent Rewards")
 plt.plot(rewards)
-plt.xlim([0, 210])
+#plt.xlim([0, 210])
 plt.show()
-## END TRAINING ##
+
+fig, ax1 = plt.subplots()
+t = np.arange(0.0, 150.0, 1)
+ax1.plot(F[1:], 'y')
+ax1.set_xlabel('Days')
+# Make the y-axis label and tick labels match the line color.
+ax1.set_ylabel('Neuron Output', color='b')
+for tl in ax1.get_yticklabels():
+    tl.set_color('b')
+
+B = F[1:] > 0
+for i,b in enumerate(B):
+    if b:
+        plt.plot([i, i], [-1, 1], color='b', linestyle='-', linewidth=2)
+    else:
+        plt.plot([i, i], [-1, 1], color='g', linestyle='-', linewidth=2)
+
+ax2 = ax1.twinx()
+ax2.plot(returns, 'r-', linewidth=3)
+ax2.set_ylabel('Returns', color='r')
+for tl in ax2.get_yticklabels():
+    tl.set_color('r')
 
 
+plt.show()
+
+
+# Test
+print (theta)
+Xtest = testData
+Xtest = GetReturns(testData)
+Xtest_n = FeatureNormalize(Xtest)
+M = 50
+T = 50
+startPos = M+T
+# Compute the output F.
+print("Computing neuron outputs F... ")
+F = ComputeF(theta, Xtest_n, T, M, startPos)
+# Compute the rewards
+print("Computing reward function... ")
+rewards = RewardFunction(mu, F, transactionCosts, T, M, Xtest)
+# Compute the cumulative reward.
+rewards = rewards + 1 # Add one to the rewards vector such that the reward does not vanish.
+for i in range(1, rewards.size):
+    rewards[i] = rewards[i-1]*rewards[i]
+
+returns = X[startPos:finishPos] + 1
+for i in range(1, returns.size):
+    returns[i] = returns[i-1]*returns[i]
+
+
+# Plotting #
+plt.subplot(3, 1, 1)
+plt.title("Returns")
+plt.plot(returns)
+#plt.xlim([0, 210])
+plt.subplot(3, 1, 2)
+plt.title("Neuron Output")
+plt.plot([0, T], [0, 0], color='k', linestyle='-', linewidth=2)
+plt.plot(F[1:], color='r', linestyle='--')
+plt.ylim([-1,1])
+
+
+#plt.xlim([0, 210])
+plt.subplot(3, 1, 3)
+plt.title("Agent Rewards")
+plt.plot(rewards)
+#plt.xlim([0, 210])
+plt.show()
+
+
+fig, ax1 = plt.subplots()
+t = np.arange(0.0, 150.0, 1)
+ax1.plot(F[1:], 'y')
+ax1.set_xlabel('Days')
+# Make the y-axis label and tick labels match the line color.
+ax1.set_ylabel('Neuron Output', color='b')
+for tl in ax1.get_yticklabels():
+    tl.set_color('b')
+
+B = F[1:] > 0
+for i,b in enumerate(B):
+    if b:
+        plt.plot([i, i], [-1, 1], color='b', linestyle='-', linewidth=2)
+    else:
+        plt.plot([i, i], [-1, 1], color='g', linestyle='-', linewidth=2)
+
+ax2 = ax1.twinx()
+ax2.plot(returns, 'r-', linewidth=3)
+ax2.set_ylabel('Returns', color='r')
+for tl in ax2.get_yticklabels():
+    tl.set_color('r')
+plt.show()
 #### END MAIN ####
